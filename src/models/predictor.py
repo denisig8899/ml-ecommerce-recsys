@@ -46,8 +46,11 @@ class Recommender:
 
         user_idx = art.user_map[visitor_id]
 
+        # implicit 0.7+: recommend() принимает одну строку (1 × n_items)
         if user_items is None:
             user_items = sp.csr_matrix((1, art.n_items), dtype=np.float32)
+        elif user_items.shape[0] != 1:
+            user_items = user_items[user_idx]
 
         ids, _ = self._model.recommend(
             user_idx,
