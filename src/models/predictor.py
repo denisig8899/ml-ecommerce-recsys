@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import scipy.sparse as sp
+import scipy.sparse as sp  # нужен для user_items (1 × n_items)
 
 from .artifact import ModelArtifact
 
@@ -61,18 +61,5 @@ class Recommender:
         return [int(art.item_ids[i]) for i in ids]
 
     def _cold_start(self, top_k: int, visitor_id: int) -> list[int]:
-        """Популярные товары, которые пользователь ещё не взаимодействовал."""
-        art = self.artifact
-        if visitor_id in art.user_map:
-            user_idx = art.user_map[visitor_id]
-        else:
-            return art.popular_items[:top_k]
-
-        # Исключить товары, с которыми уже было взаимодействие
-        seen_set: set[int] = set()
-        if hasattr(self, "_matrix") and self._matrix is not None:
-            row = self._matrix.user_item[user_idx]
-            seen_set = set(art.item_ids[row.indices].tolist())
-
-        result = [iid for iid in art.popular_items if iid not in seen_set]
-        return result[:top_k]
+        """Популярные товары (fallback для cold-start и popularity-модели)."""
+        return self.artifact.popular_items[:top_k]

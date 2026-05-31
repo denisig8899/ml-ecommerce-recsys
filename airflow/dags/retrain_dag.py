@@ -227,8 +227,6 @@ def update_model(**context) -> None:
     import shutil
 
     metrics = context["ti"].xcom_pull(key="metrics")
-    recall = metrics.get("recall@10", 0.0)
-
     recall = metrics.get("recall_at_10", 0.0)
     MIN_RECALL = float(os.getenv("MIN_RECALL_THRESHOLD", "0.01"))
     if recall < MIN_RECALL:
