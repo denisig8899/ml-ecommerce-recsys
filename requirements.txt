@@ -5,8 +5,7 @@ scipy==1.14.1
 
 # ML и рекомендации
 scikit-learn==1.5.2
-lightfm==1.17
-implicit==0.7.2
+implicit==0.7.3
 
 # MLflow
 mlflow==2.18.0
