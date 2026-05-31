@@ -19,7 +19,7 @@ MODELS_DIR = ROOT / "models"
 
 
 def log_popularity_baseline() -> None:
-    mlflow.set_tracking_uri(str(MLFLOW_URI))
+    mlflow.set_tracking_uri(MLFLOW_URI.as_uri())
     mlflow.set_experiment("ecommerce-recsys")
 
     with mlflow.start_run(run_name="popularity_baseline"):
@@ -39,7 +39,7 @@ def log_popularity_baseline() -> None:
 
 
 def log_als_model() -> None:
-    mlflow.set_tracking_uri(str(MLFLOW_URI))
+    mlflow.set_tracking_uri(MLFLOW_URI.as_uri())
     mlflow.set_experiment("ecommerce-recsys")
 
     with mlflow.start_run(run_name="als_v1"):
