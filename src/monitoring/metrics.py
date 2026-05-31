@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 
 @dataclass
 class _Histogram:
-    buckets: tuple[float, ...] = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, float("inf"))
+    buckets: tuple[float, ...] = (
+        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, float("inf")
+    )
     _counts: list[int] = field(default_factory=list)
     _sum: float = 0.0
     _total: int = 0
@@ -85,13 +87,15 @@ class MetricsCollector:
                 "# TYPE recommend_errors_total counter",
                 f'recommend_errors_total{{model="{mv}"}} {self._errors_total}',
                 "",
-                "# HELP recommend_cold_start_total Requests served with popularity fallback",
+                "# HELP recommend_cold_start_total Cold-start requests",
                 "# TYPE recommend_cold_start_total counter",
                 f'recommend_cold_start_total{{model="{mv}"}} {self._cold_start_total}',
                 "",
                 "# HELP recommend_latency_seconds Recommendation latency in seconds",
                 "# TYPE recommend_latency_seconds histogram",
-                *self._latency.prometheus_lines("recommend_latency_seconds", f'model="{mv}"'),
+                *self._latency.prometheus_lines(
+                    "recommend_latency_seconds", f'model="{mv}"'
+                ),
                 "",
                 "# HELP service_uptime_seconds Seconds since process start",
                 "# TYPE service_uptime_seconds gauge",

@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-import scipy.sparse as sp
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
 
@@ -94,3 +93,17 @@ def metrics() -> str:
 @app.get("/metrics/snapshot")
 def metrics_snapshot() -> dict[str, Any]:
     return _metrics.snapshot()
+
+
+@app.post("/reload")
+def reload_model() -> dict[str, str]:
+    """Перезагрузить модель из файла без перезапуска контейнера.
+
+    Вызывать после обновления артефактов Airflow DAG-ом.
+    """
+    global _recommender
+    for path in (MODEL_PATH, ARTIFACT_PATH):
+        if not path.exists():
+            raise HTTPException(status_code=503, detail=f"Артефакт не найден: {path}")
+    _recommender = Recommender(MODEL_PATH, ARTIFACT_PATH)
+    return {"status": "reloaded", "model_version": MODEL_VERSION}

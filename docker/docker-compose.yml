@@ -46,23 +46,31 @@ services:
     image: apache/airflow:2.10.3
     container_name: ecommerce-airflow
     environment:
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # SequentialExecutor совместим с SQLite (LocalExecutor требует PostgreSQL)
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
       AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       MLFLOW_TRACKING_URI: http://mlflow:5000
       DATA_DIR: /app/data/raw
       MODELS_DIR: /app/models
+      PYTHONPATH: /app/src
+      # Дополнительные пакеты для DAG-задач
+      _PIP_ADDITIONAL_REQUIREMENTS: >-
+        implicit==0.7.3 joblib==1.4.2 pyarrow pandas numpy scipy
     ports:
       - "8080:8080"
     volumes:
       - ../airflow/dags:/opt/airflow/dags
+      - ../src:/app/src
       - ../data:/app/data
       - ../models:/app/models
       - airflow_data:/opt/airflow
     command: >
       bash -c "airflow db init &&
                airflow users create --username admin --firstname Admin
-                 --lastname User --role Admin --email admin@example.com --password admin &&
+                 --lastname User --role Admin --email admin@example.com --password admin
+                 --password admin 2>/dev/null || true &&
                airflow scheduler &
                airflow webserver --port 8080"
     depends_on:

@@ -48,7 +48,11 @@ class Recommender:
 
         # implicit 0.7+: recommend() принимает одну строку (1 × n_items)
         if user_items is None:
-            user_items = sp.csr_matrix((1, art.n_items), dtype=np.float32)
+            if art.user_item_csr is not None:
+                # Реальная строка взаимодействий — filter_already_liked_items работает
+                user_items = art.user_item_csr[user_idx]
+            else:
+                user_items = sp.csr_matrix((1, art.n_items), dtype=np.float32)
         elif user_items.shape[0] != 1:
             user_items = user_items[user_idx]
 

@@ -33,7 +33,7 @@ default_args = {
 
 
 def load_events(**context) -> str:
-    """Загрузить и отфильтровать события за последние 90 дней."""
+    """Загрузить события, разбить на train/val, посчитать drift-метрики."""
     import pandas as pd
 
     events_path = DATA_DIR / "events.csv"
@@ -43,15 +43,32 @@ def load_events(**context) -> str:
     events = pd.read_csv(events_path)
     events["dt"] = pd.to_datetime(events["timestamp"], unit="ms")
 
-    cutoff = events["dt"].max() - pd.Timedelta(days=90)
-    recent = events[events["dt"] >= cutoff].copy()
+    window_cutoff = events["dt"].max() - pd.Timedelta(days=90)
+    recent = events[events["dt"] >= window_cutoff].copy()
 
-    out_path = DATA_DIR / "events_recent.parquet"
-    recent.to_parquet(out_path, index=False)
+    # Train/val split без leakage: train — первые 76 дней, val — последние 14
+    val_cutoff = recent["dt"].max() - pd.Timedelta(days=14)
+    train = recent[recent["dt"] < val_cutoff].copy()
+    val = recent[recent["dt"] >= val_cutoff].copy()
 
-    context["ti"].xcom_push(key="events_path", value=str(out_path))
-    context["ti"].xcom_push(key="n_events", value=len(recent))
-    return str(out_path)
+    train.to_parquet(DATA_DIR / "events_train.parquet", index=False)
+    val.to_parquet(DATA_DIR / "events_val.parquet", index=False)
+    recent.to_parquet(DATA_DIR / "events_recent.parquet", index=False)
+
+    # Базовые drift-метрики по train-окну
+    total = max(len(train), 1)
+    drift = {
+        "view_ratio": float((train["event"] == "view").sum() / total),
+        "cart_ratio": float((train["event"] == "addtocart").sum() / total),
+        "tx_ratio": float((train["event"] == "transaction").sum() / total),
+        "n_unique_users": int(train["visitorid"].nunique()),
+        "n_unique_items": int(train["itemid"].nunique()),
+        "events_per_user": float(len(train) / max(train["visitorid"].nunique(), 1)),
+    }
+    context["ti"].xcom_push(key="drift_metrics", value=drift)
+    context["ti"].xcom_push(key="events_path", value=str(DATA_DIR / "events_train.parquet"))
+    context["ti"].xcom_push(key="n_events", value=len(train))
+    return str(DATA_DIR / "events_train.parquet")
 
 
 def build_matrix(**context) -> str:
@@ -135,7 +152,10 @@ def train_model(**context) -> str:
 
 
 def evaluate_model(**context) -> dict:
-    """Вычислить recall@10 и NDCG@10 на holdout-пользователях."""
+    """Вычислить recall@10 и NDCG@10 на чистом holdout (val = последние 14 дней).
+
+    Модель обучена на train (первые 76 дней), val не использовался при обучении.
+    """
     import sys
     sys.path.insert(0, "/app/src")
 
@@ -153,26 +173,28 @@ def evaluate_model(**context) -> dict:
     model = joblib.load(model_path)
     artifact: ModelArtifact = ModelArtifact.load(artifact_path)
 
-    events = pd.read_parquet(DATA_DIR / "events_recent.parquet")
-    cutoff_ts = events["dt"].max() - pd.Timedelta(days=14)
-    val_events = events[(events["dt"] >= cutoff_ts) & (events["event"] == "addtocart")]
+    # val не пересекается с train — загружаем отдельно (сохранён в load_events)
+    val_cart = pd.read_parquet(DATA_DIR / "events_val.parquet")
+    val_cart = val_cart[val_cart["event"] == "addtocart"]
 
-    val_users = val_events["visitorid"].unique()
-    sample = val_users[val_users < artifact.n_users][:500]
+    val_users = val_cart["visitorid"].unique().tolist()
+    # Фильтрация по user_map, а не по n_users (visitorid != матричный индекс)
+    sample = [uid for uid in val_users if uid in artifact.user_map][:500]
 
     recall_scores, ndcg_scores = [], []
     K = 10
 
     for uid in sample:
-        if uid not in artifact.user_map:
-            continue
         user_idx = artifact.user_map[uid]
-        user_row = matrix.user_item[user_idx]   # (1 × n_items)
+        user_row = matrix.user_item[user_idx]
         ids, _ = model.recommend(user_idx, user_row, N=K, filter_already_liked_items=True)
         recs = set(ids)
 
         ground_truth = set(
-            val_events[val_events["visitorid"] == uid]["itemid"].map(artifact.item_map).dropna().astype(int)
+            val_cart[val_cart["visitorid"] == uid]["itemid"]
+            .map(artifact.item_map)
+            .dropna()
+            .astype(int)
         )
         if not ground_truth:
             continue
@@ -199,6 +221,7 @@ def log_to_mlflow(**context) -> None:
     import mlflow
 
     metrics = context["ti"].xcom_pull(key="metrics")
+    drift = context["ti"].xcom_pull(key="drift_metrics") or {}
     n_users = context["ti"].xcom_pull(key="n_users")
     n_items = context["ti"].xcom_pull(key="n_items")
     n_events = context["ti"].xcom_pull(key="n_events")
@@ -218,6 +241,8 @@ def log_to_mlflow(**context) -> None:
             "top_k": 10,
         })
         mlflow.log_metrics(metrics)
+        # Drift-метрики (view/cart/tx ratio, n_unique_users/items)
+        mlflow.log_metrics({f"drift_{k}": v for k, v in drift.items() if isinstance(v, float)})
         mlflow.log_artifact(context["ti"].xcom_pull(key="model_path"))
         mlflow.log_artifact(context["ti"].xcom_pull(key="artifact_path"))
 
@@ -239,6 +264,16 @@ def update_model(**context) -> None:
 
     shutil.copy(model_path, MODELS_DIR / "als_model.pkl")
     shutil.copy(artifact_path, MODELS_DIR / "artifact.pkl")
+
+    # Сигнализируем API перезагрузить модель без перезапуска контейнера
+    import urllib.request
+    api_url = os.getenv("API_URL", "http://api:8000")
+    try:
+        req = urllib.request.Request(f"{api_url}/reload", method="POST")
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as exc:
+        # Не прерываем DAG если API недоступен — предупреждение достаточно
+        print(f"Warning: не удалось вызвать /reload: {exc}")
 
 
 # ---------------------------------------------------------------------------

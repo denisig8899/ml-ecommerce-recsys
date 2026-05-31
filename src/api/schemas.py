@@ -12,8 +12,12 @@ class RecommendRequest(BaseModel):
 
 class RecommendResponse(BaseModel):
     visitor_id: int
-    recommendations: list[int] = Field(..., description="Список itemid в порядке убывания релевантности")
-    is_cold_start: bool = Field(..., description="True если пользователь не встречался при обучении")
+    recommendations: list[int] = Field(
+        ..., description="Список itemid в порядке убывания релевантности"
+    )
+    is_cold_start: bool = Field(
+        ..., description="True если пользователь не встречался при обучении"
+    )
     model_version: str
     latency_ms: float
 

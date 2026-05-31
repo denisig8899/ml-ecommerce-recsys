@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
+import scipy.sparse as sp
 
 
 @dataclass
@@ -21,6 +23,7 @@ class ModelArtifact:
         popular_items: топ-N товаров по количеству addtocart (для cold-start)
         n_users: размер пространства пользователей
         n_items: размер пространства товаров
+        user_item_csr: матрица (n_users × n_items) для filter_already_liked_items
         metrics: метрики качества на валидации
     """
 
@@ -32,6 +35,7 @@ class ModelArtifact:
     popular_items: list[int]
     n_users: int
     n_items: int
+    user_item_csr: Optional[sp.csr_matrix] = None
     metrics: dict[str, float] = field(default_factory=dict)
 
     def save(self, path: str | Path) -> None:

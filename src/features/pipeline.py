@@ -8,7 +8,6 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-
 EVENT_WEIGHTS = {
     "view": 1.0,
     "addtocart": 5.0,
