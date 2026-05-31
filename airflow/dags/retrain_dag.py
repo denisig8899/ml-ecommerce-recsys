@@ -98,7 +98,7 @@ def train_model(**context) -> str:
         random_state=42,
         use_gpu=False,
     )
-    model.fit(matrix.item_user)
+    model.fit(matrix.user_item)  # implicit >= 0.7: (n_users × n_items)
 
     # Popularity fallback: топ по addtocart
     import pandas as pd
