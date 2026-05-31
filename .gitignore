@@ -5,12 +5,12 @@ data/
 *.feather
 *.cache
 
-# Модели
+# Модели (артефакты в корневой папке models/)
 *.pkl
 *.bin
 *.joblib
 *.model
-models/
+/models/
 
 # MLflow
 mlruns/

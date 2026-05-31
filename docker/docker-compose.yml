@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: ml-ecommerce-recsys:latest
+    container_name: ecommerce-recsys-api
+    ports:
+      - "8000:8000"
+    environment:
+      MODEL_PATH: /app/models/als_model.pkl
+      ARTIFACT_PATH: /app/models/artifact.pkl
+      MODEL_VERSION: als_v1
+    volumes:
+      - ../models:/app/models:ro
+    restart: unless-stopped
+    depends_on:
+      - mlflow
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mlflow:
+    image: python:3.12-slim
+    container_name: ecommerce-mlflow
+    working_dir: /mlflow
+    command: >
+      bash -c "pip install --quiet mlflow &&
+               mlflow server
+               --backend-store-uri sqlite:///mlflow.db
+               --default-artifact-root /mlflow/artifacts
+               --host 0.0.0.0
+               --port 5000"
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    restart: unless-stopped
+
+  airflow:
+    image: apache/airflow:2.10.3
+    container_name: ecommerce-airflow
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      DATA_DIR: /app/data/raw
+      MODELS_DIR: /app/models
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../airflow/dags:/opt/airflow/dags
+      - ../data:/app/data
+      - ../models:/app/models
+      - airflow_data:/opt/airflow
+    command: >
+      bash -c "airflow db init &&
+               airflow users create --username admin --firstname Admin
+                 --lastname User --role Admin --email admin@example.com --password admin &&
+               airflow scheduler &
+               airflow webserver --port 8080"
+    depends_on:
+      - mlflow
+    restart: unless-stopped
+
+volumes:
+  mlflow_data:
+  airflow_data:
