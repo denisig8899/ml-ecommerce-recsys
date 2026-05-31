@@ -98,7 +98,7 @@ def train_model(**context) -> str:
         random_state=42,
         use_gpu=False,
     )
-    model.fit(matrix.user_item)  # implicit >= 0.7: (n_users × n_items)
+    model.fit(matrix.user_item)  # implicit >= 0.7: fit() принимает (n_users × n_items)
 
     # Popularity fallback: топ по addtocart
     import pandas as pd
@@ -167,8 +167,8 @@ def evaluate_model(**context) -> dict:
         if uid not in artifact.user_map:
             continue
         user_idx = artifact.user_map[uid]
-        user_items = matrix.user_item[user_idx]
-        ids, _ = model.recommend(user_idx, user_items, N=K, filter_already_liked_items=True)
+        user_row = matrix.user_item[user_idx]   # (1 × n_items)
+        ids, _ = model.recommend(user_idx, user_row, N=K, filter_already_liked_items=True)
         recs = set(ids)
 
         ground_truth = set(
@@ -185,8 +185,8 @@ def evaluate_model(**context) -> dict:
         ndcg_scores.append(dcg / idcg if idcg > 0 else 0.0)
 
     metrics = {
-        f"recall@{K}": float(np.mean(recall_scores)) if recall_scores else 0.0,
-        f"ndcg@{K}": float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,
+        f"recall_at_{K}": float(np.mean(recall_scores)) if recall_scores else 0.0,
+        f"ndcg_at_{K}": float(np.mean(ndcg_scores)) if ndcg_scores else 0.0,
         "n_evaluated": len(recall_scores),
     }
 
@@ -229,6 +229,7 @@ def update_model(**context) -> None:
     metrics = context["ti"].xcom_pull(key="metrics")
     recall = metrics.get("recall@10", 0.0)
 
+    recall = metrics.get("recall_at_10", 0.0)
     MIN_RECALL = float(os.getenv("MIN_RECALL_THRESHOLD", "0.01"))
     if recall < MIN_RECALL:
         raise ValueError(

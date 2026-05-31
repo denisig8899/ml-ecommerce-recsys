@@ -29,9 +29,9 @@ def log_popularity_baseline() -> None:
             "target": "addtocart",
         })
         mlflow.log_metrics({
-            "recall@10": 0.0150,
-            "ndcg@10": 0.0098,
-            "precision@10": 0.0024,
+            "recall_at_10": 0.0150,
+            "ndcg_at_10": 0.0098,
+            "precision_at_10": 0.0024,
         })
         artifact = MODELS_DIR / "artifact_popularity.pkl"
         if artifact.exists():
@@ -54,9 +54,9 @@ def log_als_model() -> None:
             "weights": "view=1, addtocart=5, transaction=10",
         })
         mlflow.log_metrics({
-            "recall@10": 0.0167,
-            "ndcg@10": 0.0104,
-            "precision@10": 0.0028,
+            "recall_at_10": 0.0167,
+            "ndcg_at_10": 0.0104,
+            "precision_at_10": 0.0028,
         })
         for name in ("als_model.pkl", "artifact.pkl"):
             path = MODELS_DIR / name
