@@ -12,8 +12,9 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+from airflow import DAG
 
 DATA_DIR = Path(os.getenv("DATA_DIR", "/app/data/raw"))
 MODELS_DIR = Path(os.getenv("MODELS_DIR", "/app/models"))
@@ -65,9 +66,10 @@ def load_events(**context) -> str:
         "n_unique_items": int(train["itemid"].nunique()),
         "events_per_user": float(len(train) / max(train["visitorid"].nunique(), 1)),
     }
-    context["ti"].xcom_push(key="drift_metrics", value=drift)
-    context["ti"].xcom_push(key="events_path", value=str(DATA_DIR / "events_train.parquet"))
-    context["ti"].xcom_push(key="n_events", value=len(train))
+    ti = context["ti"]
+    ti.xcom_push(key="drift_metrics", value=drift)
+    ti.xcom_push(key="events_path", value=str(DATA_DIR / "events_train.parquet"))
+    ti.xcom_push(key="n_events", value=len(train))
     return str(DATA_DIR / "events_train.parquet")
 
 
@@ -77,6 +79,7 @@ def build_matrix(**context) -> str:
     sys.path.insert(0, "/app/src")
 
     import pandas as pd
+
     from features import InteractionMatrix
 
     events_path = context["ti"].xcom_pull(key="events_path")
@@ -99,11 +102,11 @@ def train_model(**context) -> str:
     import sys
     sys.path.insert(0, "/app/src")
 
-    import joblib
     import implicit
+    import joblib
+
     from features import InteractionMatrix
     from models import ModelArtifact
-    import numpy as np
 
     matrix_path = context["ti"].xcom_pull(key="matrix_path")
     matrix: InteractionMatrix = InteractionMatrix.load(matrix_path)
@@ -137,6 +140,7 @@ def train_model(**context) -> str:
         popular_items=popular,
         n_users=matrix.n_users,
         n_items=matrix.n_items,
+        user_item_csr=matrix.user_item,
     )
 
     model_path = MODELS_DIR / "als_model_new.pkl"
@@ -162,6 +166,7 @@ def evaluate_model(**context) -> dict:
     import joblib
     import numpy as np
     import pandas as pd
+
     from features import InteractionMatrix
     from models import ModelArtifact
 
@@ -187,7 +192,9 @@ def evaluate_model(**context) -> dict:
     for uid in sample:
         user_idx = artifact.user_map[uid]
         user_row = matrix.user_item[user_idx]
-        ids, _ = model.recommend(user_idx, user_row, N=K, filter_already_liked_items=True)
+        ids, _ = model.recommend(
+            user_idx, user_row, N=K, filter_already_liked_items=True
+        )
         recs = set(ids)
 
         ground_truth = set(
@@ -241,8 +248,8 @@ def log_to_mlflow(**context) -> None:
             "top_k": 10,
         })
         mlflow.log_metrics(metrics)
-        # Drift-метрики (view/cart/tx ratio, n_unique_users/items)
-        mlflow.log_metrics({f"drift_{k}": v for k, v in drift.items() if isinstance(v, float)})
+        # Drift-метрики: все значения кастуем в float (int тоже допустим в MLflow)
+        mlflow.log_metrics({f"drift_{k}": float(v) for k, v in drift.items()})
         mlflow.log_artifact(context["ti"].xcom_pull(key="model_path"))
         mlflow.log_artifact(context["ti"].xcom_pull(key="artifact_path"))
 
@@ -256,7 +263,8 @@ def update_model(**context) -> None:
     MIN_RECALL = float(os.getenv("MIN_RECALL_THRESHOLD", "0.01"))
     if recall < MIN_RECALL:
         raise ValueError(
-            f"Новая модель не прошла порог качества: recall@10={recall:.4f} < {MIN_RECALL}"
+            f"Новая модель не прошла порог качества: "
+            f"recall@10={recall:.4f} < {MIN_RECALL}"
         )
 
     model_path = context["ti"].xcom_pull(key="model_path")
@@ -266,14 +274,18 @@ def update_model(**context) -> None:
     shutil.copy(artifact_path, MODELS_DIR / "artifact.pkl")
 
     # Сигнализируем API перезагрузить модель без перезапуска контейнера
+    import urllib.error
     import urllib.request
+
     api_url = os.getenv("API_URL", "http://api:8000")
+    req = urllib.request.Request(f"{api_url}/reload", method="POST")
     try:
-        req = urllib.request.Request(f"{api_url}/reload", method="POST")
         urllib.request.urlopen(req, timeout=10)
-    except Exception as exc:
-        # Не прерываем DAG если API недоступен — предупреждение достаточно
-        print(f"Warning: не удалось вызвать /reload: {exc}")
+    except (urllib.error.URLError, OSError) as exc:
+        raise RuntimeError(
+            f"Модель обновлена, но API не перезагрузил её: {exc}. "
+            "Перезапустите контейнер api вручную."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
