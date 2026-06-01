@@ -237,5 +237,5 @@ models/artifact.pkl
 
 ## Зависимости
 
-Python 3.12. Основные библиотеки: pandas 2.2.3, implicit 0.7.2, fastapi 0.115.5,
+Python 3.12. Основные библиотеки: pandas 2.2.3, implicit 0.7.3, fastapi 0.115.5,
 mlflow 2.18.0, apache-airflow 2.10.3.

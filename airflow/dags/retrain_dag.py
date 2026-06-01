@@ -56,15 +56,18 @@ def load_events(**context) -> str:
     val.to_parquet(DATA_DIR / "events_val.parquet", index=False)
     recent.to_parquet(DATA_DIR / "events_recent.parquet", index=False)
 
-    # Базовые drift-метрики по train-окну
-    total = max(len(train), 1)
+    # Drift-метрики по последним 7 дням (как указано в документации)
+    last7 = recent[recent["dt"] >= recent["dt"].max() - pd.Timedelta(days=7)]
+    total7 = max(len(last7), 1)
     drift = {
-        "view_ratio": float((train["event"] == "view").sum() / total),
-        "cart_ratio": float((train["event"] == "addtocart").sum() / total),
-        "tx_ratio": float((train["event"] == "transaction").sum() / total),
-        "n_unique_users": int(train["visitorid"].nunique()),
-        "n_unique_items": int(train["itemid"].nunique()),
-        "events_per_user": float(len(train) / max(train["visitorid"].nunique(), 1)),
+        "view_ratio": float((last7["event"] == "view").sum() / total7),
+        "cart_ratio": float((last7["event"] == "addtocart").sum() / total7),
+        "tx_ratio": float((last7["event"] == "transaction").sum() / total7),
+        "n_unique_users_7d": int(last7["visitorid"].nunique()),
+        "n_unique_items_7d": int(last7["itemid"].nunique()),
+        "events_per_user_7d": float(
+            len(last7) / max(last7["visitorid"].nunique(), 1)
+        ),
     }
     ti = context["ti"]
     ti.xcom_push(key="drift_metrics", value=drift)
@@ -254,6 +257,57 @@ def log_to_mlflow(**context) -> None:
         mlflow.log_artifact(context["ti"].xcom_pull(key="artifact_path"))
 
 
+def check_drift(**context) -> None:
+    """Сравнить drift-метрики последних 7 дней с baseline и выдать алерт при нарушении.
+
+    Пороги из документации (docs/monitoring.md):
+      - Доли событий (view/cart/tx): ±20% от исторического baseline
+      - Средняя длина сессии: ±30% от baseline
+    При нарушении порога задача завершается с ошибкой — DAG уведомляет о проблеме.
+    """
+    import logging
+
+    drift = context["ti"].xcom_pull(key="drift_metrics") or {}
+
+    # Исторический baseline (EDA: 96.7% view, 2.5% cart, 0.8% tx)
+    BASELINE = {
+        "view_ratio": 0.967,
+        "cart_ratio": 0.025,
+        "tx_ratio": 0.008,
+    }
+    RATIO_THRESHOLD = 0.20  # ±20% от baseline (docs/monitoring.md)
+
+    # Средняя длина сессии (±30%) требует исторического baseline-значения,
+    # которого нет в статических данных — проверяем только доли событий
+    alerts = []
+    for key, baseline in BASELINE.items():
+        actual = drift.get(key)
+        if actual is None:
+            logging.warning("Drift metric %s отсутствует в XCom", key)
+            continue
+        deviation = abs(actual - baseline) / baseline
+        if deviation > RATIO_THRESHOLD:
+            alerts.append(
+                f"{key}: фактическое={actual:.3f}, "
+                f"baseline={baseline:.3f}, "
+                f"отклонение={deviation:.1%} > {RATIO_THRESHOLD:.0%}"
+            )
+
+    if alerts:
+        msg = "DRIFT ALERT — нарушены пороги из docs/monitoring.md:\n" + "\n".join(
+            f"  • {a}" for a in alerts
+        )
+        logging.error(msg)
+        raise ValueError(msg)
+
+    logging.info(
+        "Drift check пройден. view=%.3f cart=%.3f tx=%.3f (все в пределах ±20%%)",
+        drift.get("view_ratio", 0),
+        drift.get("cart_ratio", 0),
+        drift.get("tx_ratio", 0),
+    )
+
+
 def update_model(**context) -> None:
     """Заменить production-артефакты новыми, если метрики не ухудшились."""
     import shutil
@@ -327,9 +381,14 @@ with DAG(
         python_callable=log_to_mlflow,
     )
 
+    t_drift = PythonOperator(
+        task_id="check_drift",
+        python_callable=check_drift,
+    )
+
     t_update = PythonOperator(
         task_id="update_model",
         python_callable=update_model,
     )
 
-    t_load >> t_matrix >> t_train >> t_eval >> t_log >> t_update
+    t_load >> t_matrix >> t_train >> t_eval >> t_log >> t_drift >> t_update
